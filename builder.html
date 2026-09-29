@@ -106,7 +106,7 @@ iframe{flex:1;min-height:0;width:100%;border:0;background:#fff}
   <ol class="steps" id="steps" hidden></ol>
   <div class="comp">
     <textarea id="prompt" maxlength="2000" placeholder="Ask Nexora to build, modify, or explain something..."></textarea>
-    <div class="cr"><span class="mut" id="cnt">0 / 2000</span><div style="display:flex;align-items:center;gap:7px"><select class="model-select" id="model" aria-label="AI model"><option value="nexora-2.0">Nexora-2.0</option><option value="nexora-3.1">Nexora-3.1</option></select><button class="btn solid" id="gen">Generate</button></div></div>
+    <div class="cr"><span class="mut" id="cnt">0 / 2000</span><div style="display:flex;align-items:center;gap:7px"><select class="model-select" id="model" aria-label="AI model"><option value="nexora-2.0">Nexora-2.0</option><option value="nexora-3.1">Nexora-3.1</option></select><button class="btn solid" id="gen">Send</button></div></div>
   </div>
 </aside>
 <section class="pv">
@@ -283,23 +283,67 @@ async function generateRequest(prompt,files){
 }
 async function run(text,retry){
   if(!requireSession())return;
-  if(busy)return;text=text.trim().slice(0,MAX);if(!text){NX.toast('Type a message first');ta.focus();return}
-  busy=true;if(!retry)add({r:'u',t:text});ta.value='';count();step(0);
+  if(busy)return;
+  text=text.trim().slice(0,MAX);
+  if(!text){NX.toast('Type a message first');ta.focus();return}
+
+  busy=true;
+  if(!retry)add({r:'u',t:text});
+  ta.value='';
+  count();
+
+  // Do not show website-generation steps until the backend
+  // confirms that this request is actually a website request.
+  stepsEl.hidden=true;
+  $('#status').textContent='Thinking…';
+  gen.disabled=true;
+
   try{
-    step(1);
     const out=await generateRequest(text,p.files);
+
+    // Normal chat: reply directly without website-generation animation.
     if(out.mode==='chat'){
       stepsEl.hidden=true;
-      add({r:'a',t:String(out.response||out.message||'I could not generate a response.').slice(0,6000)});
+      add({
+        r:'a',
+        t:String(out.response||out.message||'I could not generate a response.').slice(0,6000)
+      });
     }else{
+      // Website request: show the generation animation only now.
+      step(0);
+      $('#status').textContent='Building…';
+      step(1);
+
       const f=out&&out.files||out;
-      if(!f||typeof f.html!=='string'||f.html.length>5e5)throw new Error('The AI service returned an unusable response.');
-      step(2);p.files={html:f.html,css:String(f.css||''),js:String(f.js||'')};p.prompt=p.prompt||text;p.status='draft';preview();
-      step(3);add({r:'a',t:String(out.message||'Your website is ready. You can host it or open the code editor.').slice(0,600),done:true});
+      if(!f||typeof f.html!=='string'||f.html.length>5e5){
+        throw new Error('The AI service returned an unusable response.');
+      }
+
+      step(2);
+      p.files={html:f.html,css:String(f.css||''),js:String(f.js||'')};
+      p.prompt=p.prompt||text;
+      p.status='draft';
+      preview();
+      step(3);
+
+      add({
+        r:'a',
+        t:String(out.message||'Your website is ready. You can host it or open the code editor.').slice(0,600),
+        done:true
+      });
     }
-  }catch(e){stepsEl.hidden=true;
-    add({r:'e',t:e.status===429?'Generation limit reached. '+e.message:'Generation failed: '+e.message,retry:text})}
-  busy=false;sync()}
+  }catch(e){
+    stepsEl.hidden=true;
+    add({
+      r:'e',
+      t:e.status===429?'Generation limit reached. '+e.message:'Generation failed: '+e.message,
+      retry:text
+    });
+  }
+
+  busy=false;
+  sync();
+}
 const toEditor=()=>{if(!requireSession())return;persist();location.href='editor.html?project='+encodeURIComponent(p.id)},toHost=()=>{if(!requireSession())return;if(!p.files){NX.toast('Generate a website first, then host it.');return}persist();NX.host(p)};
 gen.onclick=()=>run(ta.value);
 ta.oninput=count;ta.onkeydown=e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();run(ta.value)}};
