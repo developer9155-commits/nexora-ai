@@ -281,37 +281,89 @@ async function generateRequest(prompt,files){
   const history=(p.messages||[]).slice(-12).map(m=>({role:m.r==='u'?'user':'assistant',content:String(m.t||'').slice(0,4000)}));
   return await NX.generate(prompt,files||null,getSelectedModel(),history);
 }
+function isWebsiteRequest(text){
+  const q=String(text||'').trim().toLowerCase();
+  if(!q)return false;
+
+  // Explicit website creation/building requests.
+  const websitePatterns=[
+    /\b(create|build|make|design|develop|generate|create me|build me|make me)\b.{0,80}\b(website|site|webpage|landing page|portfolio|dashboard|web app|web application|page|store|shop|blog|saas|restaurant|agency)\b/i,
+    /\b(website|site|webpage|landing page|portfolio|dashboard|web app|web application|page|store|shop|blog)\b.{0,100}\b(create|build|make|design|develop|generate|add|change|update|modify|improve|redesign|edit)\b/i,
+    /\b(add|change|update|modify|edit|remove|delete|replace|improve|redesign|fix|change the|make the)\b.{0,120}\b(hero|navbar|header|footer|button|section|form|card|menu|color|font|animation|layout|design|image|text|background|website|site|page)\b/i,
+    /\b(make|change|set|turn)\b.{0,80}\b(it|this|that|the website|the site|the page|the button|the navbar|the header|the background)\b/i,
+    /\b(add|remove|update|change|modify|edit|replace)\b.{0,100}\b(to|on|in)\b.{0,100}\b(website|site|page|design|layout)\b/i,
+    /\b(website|site|page)\b.*\b(should|must|need to)\b/i
+  ];
+
+  if(websitePatterns.some(r=>r.test(q)))return true;
+
+  // Clear ordinary questions should never trigger the website animation.
+  const chatPatterns=[
+    /^(what|why|how|when|where|who|which|can|could|would|should|is|are|am|do|does|did|will|tell me|explain|define|give me|help me understand)\b/i,
+    /\?\s*$/
+  ];
+  if(chatPatterns.some(r=>r.test(q)))return false;
+
+  // If a website already exists, short modification requests are website tasks.
+  if(p&&p.files){
+    const contextPatterns=[
+      /\b(make|change|update|modify|edit|add|remove|delete|replace|improve|fix|redesign|move|hide|show)\b/i,
+      /\b(blue|red|green|black|white|larger|smaller|bigger|smaller|modern|responsive|mobile|desktop|centered|dark|light)\b/i
+    ];
+    if(contextPatterns.some(r=>r.test(q)))return true;
+  }
+
+  return false;
+}
+
 async function run(text,retry){
   if(!requireSession())return;
   if(busy)return;
+
   text=text.trim().slice(0,MAX);
-  if(!text){NX.toast('Type a message first');ta.focus();return}
+  if(!text){
+    NX.toast('Type a message first');
+    ta.focus();
+    return;
+  }
 
   busy=true;
   if(!retry)add({r:'u',t:text});
   ta.value='';
   count();
 
-  // Do not show website-generation steps until the backend
-  // confirms that this request is actually a website request.
-  stepsEl.hidden=true;
-  $('#status').textContent='Thinking…';
+  // Decide whether to show the website-building animation BEFORE the request.
+  // Normal chat never shows these steps.
+  const websiteTask=isWebsiteRequest(text);
+
+  if(websiteTask){
+    step(0);
+    $('#status').textContent='Understanding request…';
+  }else{
+    stepsEl.hidden=true;
+    $('#status').textContent='Thinking…';
+  }
+
   gen.disabled=true;
 
   try{
     const out=await generateRequest(text,p.files);
 
-    // Normal chat: reply directly without website-generation animation.
     if(out.mode==='chat'){
+      // Backend confirmed this is normal chat. Always hide website steps.
       stepsEl.hidden=true;
       add({
         r:'a',
         t:String(out.response||out.message||'I could not generate a response.').slice(0,6000)
       });
     }else{
-      // Website request: show the generation animation only now.
-      step(0);
-      $('#status').textContent='Building…';
+      // Website generation: show the full animation sequence.
+      if(!websiteTask){
+        // Covers an ambiguous prompt that the backend classified as a website task.
+        step(0);
+      }
+
+      $('#status').textContent='Generating code…';
       step(1);
 
       const f=out&&out.files||out;
@@ -319,13 +371,19 @@ async function run(text,retry){
         throw new Error('The AI service returned an unusable response.');
       }
 
+      $('#status').textContent='Preparing preview…';
       step(2);
-      p.files={html:f.html,css:String(f.css||''),js:String(f.js||'')};
+
+      p.files={
+        html:f.html,
+        css:String(f.css||''),
+        js:String(f.js||'')
+      };
       p.prompt=p.prompt||text;
       p.status='draft';
       preview();
-      step(3);
 
+      step(3);
       add({
         r:'a',
         t:String(out.message||'Your website is ready. You can host it or open the code editor.').slice(0,600),
@@ -344,6 +402,7 @@ async function run(text,retry){
   busy=false;
   sync();
 }
+
 const toEditor=()=>{if(!requireSession())return;persist();location.href='editor.html?project='+encodeURIComponent(p.id)},toHost=()=>{if(!requireSession())return;if(!p.files){NX.toast('Generate a website first, then host it.');return}persist();NX.host(p)};
 gen.onclick=()=>run(ta.value);
 ta.oninput=count;ta.onkeydown=e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();run(ta.value)}};
